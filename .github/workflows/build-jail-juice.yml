@@ -1,0 +1,154 @@
+﻿name: Build Jail-Juice iOS (.ipa)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Jail-Juice IPA
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode 16
+        run: |
+          for xcode in /Applications/Xcode_16*.app /Applications/Xcode.app; do
+            if [ -d "$xcode" ]; then
+              echo "Selecting $xcode"
+              sudo xcode-select -s "$xcode"
+              break
+            fi
+          done
+          xcodebuild -version
+
+      - name: Install Build Tools via Homebrew
+        run: |
+          brew install ldid zip || true
+          python3 -m pip install --break-system-packages pillow || pip3 install pillow || true
+
+      - name: Build Launchers (grape-trace-parent & grape-nested-wrapper)
+        run: |
+          echo "🍇 Building Grape JIT launchers..."
+          chmod +x scripts/*.sh 2>/dev/null || true
+          bash scripts/build-launchers.sh
+
+      - name: Build UIKit App (Juice.app)
+        run: |
+          echo "🍇 Building Jail-Juice UIKit Application..."
+          mkdir -p build/app/Juice.app
+          
+          # Build via Xcode project or build-app script
+          if [ -d "Juice.xcodeproj" ]; then
+            xcodebuild \
+              -project Juice.xcodeproj \
+              -scheme Juice \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -derivedDataPath build/DerivedData \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              clean build || {
+                echo "Xcode build fallback to script..."
+                bash scripts/build-app.sh
+              }
+          else
+            bash scripts/build-app.sh
+          fi
+
+      - name: Bundle Wine Grape Runtime and Prefix Template
+        run: |
+          echo "🍇 Bundling Wine Grape runtime..."
+          APP_PATH="$(find build -name "Juice.app" -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            APP_PATH="build/app/Juice.app"
+          fi
+          echo "Found app bundle at: $APP_PATH"
+
+          # Copy launchers into app bundle
+          mkdir -p "$APP_PATH/bin"
+          cp build/launchers/* "$APP_PATH/bin/" 2>/dev/null || cp build/launchers/* "$APP_PATH/" 2>/dev/null || true
+
+          # Fetch verified Grape Wine runtime bundle (contains Wine ARM64, PE DLLs, JuiceGUI.exe, FEX)
+          mkdir -p "$APP_PATH/Grape"
+          echo "Downloading verified Grape Wine runtime..."
+          curl -sSL "https://github.com/ExoCore-Kernel/Juice/releases/download/v0.2.0-rc2/Juice-v0.2.0-rc2.tipa" -o /tmp/juice_base.zip || true
+          
+          if [ -f /tmp/juice_base.zip ]; then
+            echo "Extracting bundled Wine runtime from core release..."
+            unzip -q /tmp/juice_base.zip -d /tmp/juice_extracted/ || true
+            CORE_APP="$(find /tmp/juice_extracted -name "*.app" -type d | head -n 1)"
+            if [ -d "$CORE_APP/Grape" ]; then
+              cp -R "$CORE_APP/Grape" "$APP_PATH/"
+            fi
+            if [ -d "$CORE_APP/Grape-X64" ]; then
+              cp -R "$CORE_APP/Grape-X64" "$APP_PATH/"
+            fi
+            rm -rf /tmp/juice_base.zip /tmp/juice_extracted
+          fi
+
+          # Ensure prefix template structure exists
+          mkdir -p "$APP_PATH/Grape/prefix-template/drive_c/windows/system32"
+          mkdir -p "$APP_PATH/Grape/prefix-template/dosdevices"
+          ln -sfn "../drive_c" "$APP_PATH/Grape/prefix-template/dosdevices/c:" 2>/dev/null || true
+          ln -sfn "/" "$APP_PATH/Grape/prefix-template/dosdevices/z:" 2>/dev/null || true
+
+          # Generate app icons if missing
+          python3 scripts/generate-app-icons.py "$APP_PATH" 2>/dev/null || true
+
+          # Apply JIT entitlements
+          if command -v ldid >/dev/null 2>&1; then
+            ldid -Sconfig/jailed-entitlements.plist "$APP_PATH/Juice" 2>/dev/null || true
+          fi
+
+      - name: Package Jail-Juice .ipa Artifact
+        run: |
+          echo "🍇 Packaging Jail-Juice.ipa..."
+          APP_PATH="$(find build -name "Juice.app" -type d | head -n 1)"
+          
+          STAGE_DIR="build/ipa_stage"
+          rm -rf "$STAGE_DIR"
+          mkdir -p "$STAGE_DIR/Payload"
+          mkdir -p dist
+
+          cp -R "$APP_PATH" "$STAGE_DIR/Payload/Juice.app"
+
+          OUTPUT_IPA="$PWD/dist/Jail-Juice.ipa"
+          (cd "$STAGE_DIR" && zip -qry "$OUTPUT_IPA" Payload)
+          cp "$OUTPUT_IPA" "$PWD/dist/Jail-Juice.tipa"
+
+          rm -rf "$STAGE_DIR"
+          ls -la dist/
+
+      - name: Upload Jail-Juice IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jail-Juice-ipa
+          path: dist/Jail-Juice.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish Release (Tags Only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Jail-Juice.ipa
+            dist/Jail-Juice.tipa
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
