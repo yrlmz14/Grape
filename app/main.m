@@ -1110,14 +1110,18 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
 {
  NSString *b=[self.grape stringByAppendingPathComponent:@"build/wine-ios"];
  NSString *pe=[self.grape stringByAppendingPathComponent:@"runtime/lib/wine/aarch64-windows"];
+ NSString *libraries=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Libraries"];
+ NSString *frameworks=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"];
  NSMutableArray *variables=[NSMutableArray arrayWithArray:@[
   [@"HOME=" stringByAppendingString:NSHomeDirectory()],
   [@"TMPDIR=" stringByAppendingString:NSTemporaryDirectory()],
   [@"WINEPREFIX=" stringByAppendingString:self.prefix],
   [@"WINELOADER=" stringByAppendingString:[self.grape stringByAppendingPathComponent:@"tools/grape-nested-wrapper"]],
   [@"WINESERVER=" stringByAppendingString:[b stringByAppendingPathComponent:@"server/wineserver"]],
-   [@"WINEDLLPATH=" stringByAppendingString:[NSString stringWithFormat:@"%@:%@:%@:%@:%@:%@",pe,[JuiceDataDirectory() stringByAppendingPathComponent:@"native"],[b stringByAppendingPathComponent:@"dlls/crypt32"],[b stringByAppendingPathComponent:@"dlls/wineios.drv"],[b stringByAppendingPathComponent:@"dlls/win32u"],[b stringByAppendingPathComponent:@"dlls/ws2_32"]]],
-   [@"JUICE_IOS_SOCKET=" stringByAppendingString:self.socketPath],
+  [@"WINEDLLPATH=" stringByAppendingString:[NSString stringWithFormat:@"%@:%@:%@:%@:%@:%@",pe,[JuiceDataDirectory() stringByAppendingPathComponent:@"native"],[b stringByAppendingPathComponent:@"dlls/crypt32"],[b stringByAppendingPathComponent:@"dlls/wineios.drv"],[b stringByAppendingPathComponent:@"dlls/win32u"],[b stringByAppendingPathComponent:@"dlls/ws2_32"]]],
+  [@"DYLD_LIBRARY_PATH=" stringByAppendingString:[NSString stringWithFormat:@"%@:%@",libraries,[self.grape stringByAppendingPathComponent:@"Libraries"]]],
+  [@"DYLD_FRAMEWORK_PATH=" stringByAppendingString:frameworks],
+  [@"JUICE_IOS_SOCKET=" stringByAppendingString:self.socketPath],
   [@"JUICE_IOS_CONTROL_SOCKET=" stringByAppendingString:self.controlSocketPath],
   [NSString stringWithFormat:@"JUICE_SKIP_WINEBOOT=%d",self.winebootSwitch.on&&!self.prefixNeedsInitialization],
   [@"WINEDEBUG=" stringByAppendingString:(self.debugField.text.length?self.debugField.text:@"-all")],
@@ -1149,17 +1153,32 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
   char **serverArgv=CopyStrings(@[server,@"-f"]);
   posix_spawn_file_actions_t sf;
   posix_spawn_file_actions_init(&sf);
-  int nullfd=open("/dev/null",O_WRONLY);
-  if(nullfd>=0){
-   posix_spawn_file_actions_adddup2(&sf,nullfd,1);
-   posix_spawn_file_actions_adddup2(&sf,nullfd,2);
-  }
+  int serverPipe[2];
+  pipe(serverPipe);
+  posix_spawn_file_actions_adddup2(&sf,serverPipe[1],1);
+  posix_spawn_file_actions_adddup2(&sf,serverPipe[1],2);
+  posix_spawn_file_actions_addclose(&sf,serverPipe[0]);
   int sr=posix_spawn(&_server,server.UTF8String,&sf,NULL,serverArgv,env);
   posix_spawn_file_actions_destroy(&sf);
-  if(nullfd>=0)close(nullfd);
+  close(serverPipe[1]);
+  int serverReadFD=serverPipe[0];
   FreeStrings(serverArgv);
   [self append:[NSString stringWithFormat:@"Wine server: %d pid=%d\n",sr,self.server]];
-  if(!sr)usleep(350000);
+  if(!sr){
+   dispatch_async(dispatch_get_global_queue(0,0),^{
+    char buf[1024];
+    ssize_t bytesRead;
+    while((bytesRead=read(serverReadFD,buf,sizeof(buf)-1))>0){
+     buf[bytesRead]=0;
+     NSString *logText=[NSString stringWithUTF8String:buf];
+     [self append:[NSString stringWithFormat:@"[wineserver] %@",logText?:@""]];
+    }
+    close(serverReadFD);
+   });
+   usleep(350000);
+  } else {
+   close(serverReadFD);
+  }
  }
  NSMutableArray *args=[NSMutableArray arrayWithObjects:tracer,loader,exe,nil];
  [args addObjectsFromArray:parts];
