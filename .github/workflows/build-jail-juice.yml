@@ -49,31 +49,10 @@ jobs:
           rm -rf build/Payload dist
           mkdir -p build/Payload dist
 
-          # 1. Build the app binary
-          if [ -d "Juice.xcodeproj" ]; then
-            echo "Building via Xcode project..."
-            xcodebuild \
-              -project Juice.xcodeproj \
-              -scheme Juice \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -derivedDataPath build/DerivedData \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              clean build || true
-          fi
-
-          XCODE_APP="$(find build/DerivedData -name "*.app" -type d 2>/dev/null | head -n 1)"
-          if [ -n "$XCODE_APP" ] && [ -f "$XCODE_APP/Juice" ]; then
-            echo "Using Xcode built app from $XCODE_APP"
-            cp -R "$XCODE_APP" build/Payload/Juice.app
-          else
-            echo "Compiling Juice.app directly via clang script..."
-            export JUICE_APP_BUILD_DIR="$PWD/build/Payload/Juice.app"
-            bash scripts/build-app.sh
-          fi
+          # 1. Build the app binary (compiles all Objective-C modules)
+          echo "Compiling Juice.app directly via clang script..."
+          export JUICE_APP_BUILD_DIR="$PWD/build/Payload/Juice.app"
+          bash scripts/build-app.sh
 
           # 2. Ensure Info.plist is present and valid
           cp config/Info.plist build/Payload/Juice.app/Info.plist
