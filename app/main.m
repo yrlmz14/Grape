@@ -1061,6 +1061,9 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
   [f copyItemAtPath:[self.grape stringByAppendingPathComponent:@"prefix-template"] toPath:self.prefix error:nil];
  NSString *dos=[self.prefix stringByAppendingPathComponent:@"dosdevices"];
  [f createDirectoryAtPath:dos withIntermediateDirectories:YES attributes:nil error:nil];
+ NSString *c=[dos stringByAppendingPathComponent:@"c:"];
+ [f removeItemAtPath:c error:nil];
+ [f createSymbolicLinkAtPath:c withDestinationPath:[self.prefix stringByAppendingPathComponent:@"drive_c"] error:nil];
  NSString *z=[dos stringByAppendingPathComponent:@"z:"];
  [f removeItemAtPath:z error:nil];
  [f createSymbolicLinkAtPath:z withDestinationPath:@"/" error:nil];

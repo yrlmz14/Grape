@@ -1,4 +1,4 @@
-﻿name: Build Jail-Juice iOS (.ipa)
+name: Build Jail-Juice iOS (.ipa)
 
 on:
   push:
@@ -103,10 +103,14 @@ jobs:
             rm -rf /tmp/juice_base.zip /tmp/juice_extracted
           fi
 
-          # 5. Ensure dosdevices symlinks and system32 structure
-          mkdir -p build/Payload/Juice.app/Grape/prefix-template/drive_c/windows/system32
+          # 5. Clean dosdevices symlinks (must not contain static colons or root symlinks that break Sideloadly / Windows unzip)
+          rm -rf build/Payload/Juice.app/Grape/prefix-template/dosdevices 2>/dev/null || true
+          rm -rf build/Payload/Juice.app/Grape-X64/prefix-template/dosdevices 2>/dev/null || true
           mkdir -p build/Payload/Juice.app/Grape/prefix-template/dosdevices
-          (cd build/Payload/Juice.app/Grape/prefix-template/dosdevices && ln -sfn "../drive_c" "c:" && ln -sfn "/" "z:") 2>/dev/null || true
+          mkdir -p build/Payload/Juice.app/Grape-X64/prefix-template/dosdevices
+          mkdir -p build/Payload/Juice.app/Grape/prefix-template/drive_c/windows/system32
+          mkdir -p build/Payload/Juice.app/Grape-X64/prefix-template/drive_c/windows/system32
+          find build/Payload -name "*:*" -delete 2>/dev/null || true
 
           # 6. Generate app icons
           python3 scripts/generate-app-icons.py build/Payload/Juice.app 2>/dev/null || true
