@@ -109,11 +109,20 @@ jobs:
             rm -rf /tmp/juice_base.zip /tmp/juice_extracted
           fi
 
-          # Ensure tools/ contains grape-trace-parent in Grape and Grape-X64
-          mkdir -p build/Payload/Juice.app/Grape/tools build/Payload/Juice.app/Grape-X64/tools
+          # Ensure tools/ and bundle root contain wineserver, wine, and grape launchers (enables Sideloadly codesigning)
+          mkdir -p build/Payload/Juice.app/Grape/tools build/Payload/Juice.app/Grape-X64/tools build/Payload/Juice.app/bin
           if [ -d "build/launchers" ]; then
             cp build/launchers/* build/Payload/Juice.app/Grape/tools/ 2>/dev/null || true
             cp build/launchers/* build/Payload/Juice.app/Grape-X64/tools/ 2>/dev/null || true
+            cp build/launchers/* build/Payload/Juice.app/bin/ 2>/dev/null || true
+            cp build/launchers/grape-trace-parent build/Payload/Juice.app/grape-trace-parent 2>/dev/null || true
+            cp build/launchers/grape-nested-wrapper build/Payload/Juice.app/grape-nested-wrapper 2>/dev/null || true
+          fi
+          if [ -f "build/Payload/Juice.app/Grape/build/wine-ios/server/wineserver" ]; then
+            cp build/Payload/Juice.app/Grape/build/wine-ios/server/wineserver build/Payload/Juice.app/wineserver
+          fi
+          if [ -f "build/Payload/Juice.app/Grape/build/wine-ios/loader/wine" ]; then
+            cp build/Payload/Juice.app/Grape/build/wine-ios/loader/wine build/Payload/Juice.app/wine
           fi
 
           # 5. Clean dosdevices symlinks (must not contain static colons or root symlinks that break Sideloadly / Windows unzip)

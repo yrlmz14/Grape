@@ -507,7 +507,7 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
 -(void)sendEnter{[self sendVirtualKey:0x0d name:@"enter"];}
 -(void)append:(NSString *)s{if(!s)return;NSLog(@"JUICE_GUI %@",[s stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet]);@synchronized(self){NSFileHandle *h=[NSFileHandle fileHandleForWritingAtPath:self.persistentLogPath];if(h){[h seekToEndOfFile];[h writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];[h closeFile];}}dispatch_async(dispatch_get_main_queue(),^{self.log.text=[(self.log.text?:@"") stringByAppendingString:s];[self.log scrollRangeToVisible:NSMakeRange(self.log.text.length,0)];});}
 -(void)startDisplayServer{
- self.socketPath=[JuiceDataDirectory() stringByAppendingPathComponent:@"juice.sock"];unlink(self.socketPath.fileSystemRepresentation);self.listenFD=socket(AF_UNIX,SOCK_STREAM,0);struct sockaddr_un a={0};a.sun_family=AF_UNIX;strncpy(a.sun_path,self.socketPath.fileSystemRepresentation,sizeof(a.sun_path)-1);int br=bind(self.listenFD,(void *)&a,sizeof(a));int lr=br?-1:listen(self.listenFD,8);[self append:[NSString stringWithFormat:@"DISPLAY_SOCKET path=%@ bind=%d listen=%d errno=%d\n",self.socketPath,br,lr,errno]];
+ self.socketPath=[NSTemporaryDirectory() stringByAppendingPathComponent:@"juice.sock"];unlink(self.socketPath.fileSystemRepresentation);self.listenFD=socket(AF_UNIX,SOCK_STREAM,0);struct sockaddr_un a={0};a.sun_family=AF_UNIX;strncpy(a.sun_path,self.socketPath.fileSystemRepresentation,sizeof(a.sun_path)-1);int br=bind(self.listenFD,(void *)&a,sizeof(a));int lr=br?-1:listen(self.listenFD,8);[self append:[NSString stringWithFormat:@"DISPLAY_SOCKET path=%@ bind=%d listen=%d errno=%d\n",self.socketPath,br,lr,errno]];
  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{while(1){int fd=accept(self.listenFD,NULL,NULL);if(fd<0)break;@synchronized(self.clients){[self.clients addObject:@(fd)];}[self append:[NSString stringWithFormat:@"DISPLAY_CLIENT_CONNECTED fd=%d\n",fd]];dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{[self readClient:fd];});}});
 }
 -(void)sendControlResponseToFD:(int)fd request:(uint32_t)request status:(int32_t)status
@@ -600,7 +600,7 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
 }
 -(void)startControlServer
 {
- self.controlSocketPath=[JuiceDataDirectory() stringByAppendingPathComponent:@"juice-control-v1.sock"];
+ self.controlSocketPath=[NSTemporaryDirectory() stringByAppendingPathComponent:@"juice-ctrl.sock"];
  unlink(self.controlSocketPath.fileSystemRepresentation);
  self.controlListenFD=socket(AF_UNIX,SOCK_STREAM,0);
  struct sockaddr_un address={0};
@@ -1136,13 +1136,20 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
  [self preparePrefix];
  NSArray *parts=self.argsField.text.length?[self.argsField.text componentsSeparatedByString:@" "]:@[];
  NSString *build=[self.grape stringByAppendingPathComponent:@"build/wine-ios"];
- NSString *loader=[build stringByAppendingPathComponent:@"loader/wine"];
- NSString *server=[build stringByAppendingPathComponent:@"server/wineserver"];
- NSString *tracer=[self.grape stringByAppendingPathComponent:@"tools/grape-trace-parent"];
+ NSString *loader=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"wine"];
+ if(![NSFileManager.defaultManager fileExistsAtPath:loader])
+  loader=[build stringByAppendingPathComponent:@"loader/wine"];
+
+ NSString *server=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"wineserver"];
+ if(![NSFileManager.defaultManager fileExistsAtPath:server])
+  server=[build stringByAppendingPathComponent:@"server/wineserver"];
+
+ NSString *tracer=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"grape-trace-parent"];
  if(![NSFileManager.defaultManager fileExistsAtPath:tracer])
   tracer=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"bin/grape-trace-parent"];
  if(![NSFileManager.defaultManager fileExistsAtPath:tracer])
-  tracer=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"grape-trace-parent"];
+  tracer=[self.grape stringByAppendingPathComponent:@"tools/grape-trace-parent"];
+
  chmod(tracer.fileSystemRepresentation, 0755);
  chmod(loader.fileSystemRepresentation, 0755);
  chmod(server.fileSystemRepresentation, 0755);
@@ -1163,7 +1170,7 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
   close(serverPipe[1]);
   int serverReadFD=serverPipe[0];
   FreeStrings(serverArgv);
-  [self append:[NSString stringWithFormat:@"Wine server: %d pid=%d\n",sr,self.server]];
+  [self append:[NSString stringWithFormat:@"Wine server: %d (%s) pid=%d path=%@\n",sr,strerror(sr),self.server,server]];
   if(!sr){
    dispatch_async(dispatch_get_global_queue(0,0),^{
     char buf[1024];
@@ -1206,7 +1213,7 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
  FreeStrings(argv);
  FreeStrings(env);
  self.canvas.hidden=self.mode.selectedSegmentIndex==1;
- [self append:[NSString stringWithFormat:@"\n%@ launch %@: %d pid=%d\n",self.mode.selectedSegmentIndex?@"CLI":@"GUI",exe,r,self.child]];
+ [self append:[NSString stringWithFormat:@"\n%@ launch %@: %d (%s) pid=%d tracer=%@\n",self.mode.selectedSegmentIndex?@"CLI":@"GUI",exe,r,strerror(r),self.child,tracer]];
  if(!r)dispatch_async(dispatch_get_global_queue(0,0),^{
   char b[2048];
   ssize_t n;
