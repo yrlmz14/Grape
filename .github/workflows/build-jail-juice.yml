@@ -43,13 +43,15 @@ jobs:
           chmod +x scripts/*.sh 2>/dev/null || true
           bash scripts/build-launchers.sh
 
-      - name: Build UIKit App (Juice.app)
+      - name: Build UIKit App and Assemble Payload
         run: |
-          echo "🍇 Building Jail-Juice UIKit Application..."
-          mkdir -p build/app/Juice.app
-          
-          # Build via Xcode project or build-app script
+          echo "🍇 Compiling UIKit Application and assembling Payload/Juice.app..."
+          rm -rf build/Payload dist
+          mkdir -p build/Payload dist
+
+          # 1. Build the app binary
           if [ -d "Juice.xcodeproj" ]; then
+            echo "Building via Xcode project..."
             xcodebuild \
               -project Juice.xcodeproj \
               -scheme Juice \
@@ -60,30 +62,32 @@ jobs:
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY="" \
-              clean build || {
-                echo "Xcode build fallback to script..."
-                bash scripts/build-app.sh
-              }
+              clean build || true
+          fi
+
+          XCODE_APP="$(find build/DerivedData -name "*.app" -type d 2>/dev/null | head -n 1)"
+          if [ -n "$XCODE_APP" ] && [ -f "$XCODE_APP/Juice" ]; then
+            echo "Using Xcode built app from $XCODE_APP"
+            cp -R "$XCODE_APP" build/Payload/Juice.app
           else
+            echo "Compiling Juice.app directly via clang script..."
+            export JUICE_APP_BUILD_DIR="$PWD/build/Payload/Juice.app"
             bash scripts/build-app.sh
           fi
 
-      - name: Bundle Wine Grape Runtime and Prefix Template
-        run: |
-          echo "🍇 Bundling Wine Grape runtime..."
-          APP_PATH="$(find build -name "Juice.app" -type d | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            APP_PATH="build/app/Juice.app"
+          # 2. Ensure Info.plist is present and valid
+          cp config/Info.plist build/Payload/Juice.app/Info.plist
+          sed -i '' 's#\$(PRODUCT_BUNDLE_IDENTIFIER)#com.jailjuice.ios#g' build/Payload/Juice.app/Info.plist 2>/dev/null || true
+
+          # 3. Copy launcher binaries
+          mkdir -p build/Payload/Juice.app/bin
+          if [ -d "build/launchers" ]; then
+            cp build/launchers/* build/Payload/Juice.app/bin/ 2>/dev/null || true
+            cp build/launchers/* build/Payload/Juice.app/ 2>/dev/null || true
           fi
-          echo "Found app bundle at: $APP_PATH"
 
-          # Copy launchers into app bundle
-          mkdir -p "$APP_PATH/bin"
-          cp build/launchers/* "$APP_PATH/bin/" 2>/dev/null || cp build/launchers/* "$APP_PATH/" 2>/dev/null || true
-
-          # Fetch verified Grape Wine runtime bundle (contains Wine ARM64, PE DLLs, JuiceGUI.exe, FEX)
-          mkdir -p "$APP_PATH/Grape"
-          echo "Downloading verified Grape Wine runtime..."
+          # 4. Download and bundle verified full Wine Grape runtime
+          echo "🍇 Downloading verified Grape Wine runtime..."
           curl -sSL "https://github.com/ExoCore-Kernel/Juice/releases/download/v0.2.0-rc2/Juice-v0.2.0-rc2.tipa" -o /tmp/juice_base.zip || true
           
           if [ -f /tmp/juice_base.zip ]; then
@@ -91,46 +95,44 @@ jobs:
             unzip -q /tmp/juice_base.zip -d /tmp/juice_extracted/ || true
             CORE_APP="$(find /tmp/juice_extracted -name "*.app" -type d | head -n 1)"
             if [ -d "$CORE_APP/Grape" ]; then
-              cp -R "$CORE_APP/Grape" "$APP_PATH/"
+              cp -R "$CORE_APP/Grape" build/Payload/Juice.app/
             fi
             if [ -d "$CORE_APP/Grape-X64" ]; then
-              cp -R "$CORE_APP/Grape-X64" "$APP_PATH/"
+              cp -R "$CORE_APP/Grape-X64" build/Payload/Juice.app/
             fi
             rm -rf /tmp/juice_base.zip /tmp/juice_extracted
           fi
 
-          # Ensure prefix template structure exists
-          mkdir -p "$APP_PATH/Grape/prefix-template/drive_c/windows/system32"
-          mkdir -p "$APP_PATH/Grape/prefix-template/dosdevices"
-          ln -sfn "../drive_c" "$APP_PATH/Grape/prefix-template/dosdevices/c:" 2>/dev/null || true
-          ln -sfn "/" "$APP_PATH/Grape/prefix-template/dosdevices/z:" 2>/dev/null || true
+          # 5. Ensure dosdevices symlinks and system32 structure
+          mkdir -p build/Payload/Juice.app/Grape/prefix-template/drive_c/windows/system32
+          mkdir -p build/Payload/Juice.app/Grape/prefix-template/dosdevices
+          (cd build/Payload/Juice.app/Grape/prefix-template/dosdevices && ln -sfn "../drive_c" "c:" && ln -sfn "/" "z:") 2>/dev/null || true
 
-          # Generate app icons if missing
-          python3 scripts/generate-app-icons.py "$APP_PATH" 2>/dev/null || true
+          # 6. Generate app icons
+          python3 scripts/generate-app-icons.py build/Payload/Juice.app 2>/dev/null || true
 
-          # Apply JIT entitlements
+          # 7. Apply JIT code signing entitlements
           if command -v ldid >/dev/null 2>&1; then
-            ldid -Sconfig/jailed-entitlements.plist "$APP_PATH/Juice" 2>/dev/null || true
+            ldid -Sconfig/jailed-entitlements.plist build/Payload/Juice.app/Juice 2>/dev/null || true
           fi
 
-      - name: Package Jail-Juice .ipa Artifact
+          # Verify Payload structure
+          echo "=== Verifying Payload/Juice.app Structure ==="
+          ls -la build/Payload/Juice.app/
+          test -f build/Payload/Juice.app/Info.plist || { echo "❌ ERROR: Info.plist missing!"; exit 1; }
+          test -f build/Payload/Juice.app/Juice || { echo "❌ ERROR: Main binary missing!"; exit 1; }
+          echo "✅ Payload structure validated successfully."
+
+      - name: Package Jail-Juice IPA
         run: |
-          echo "🍇 Packaging Jail-Juice.ipa..."
-          APP_PATH="$(find build -name "Juice.app" -type d | head -n 1)"
-          
-          STAGE_DIR="build/ipa_stage"
-          rm -rf "$STAGE_DIR"
-          mkdir -p "$STAGE_DIR/Payload"
-          mkdir -p dist
-
-          cp -R "$APP_PATH" "$STAGE_DIR/Payload/Juice.app"
-
+          echo "🍇 Creating unsigned Jail-Juice.ipa..."
           OUTPUT_IPA="$PWD/dist/Jail-Juice.ipa"
-          (cd "$STAGE_DIR" && zip -qry "$OUTPUT_IPA" Payload)
+          (cd build && zip -qry "$OUTPUT_IPA" Payload)
           cp "$OUTPUT_IPA" "$PWD/dist/Jail-Juice.tipa"
 
-          rm -rf "$STAGE_DIR"
-          ls -la dist/
+          echo "=== Verifying IPA Archive Contents ==="
+          unzip -l "$OUTPUT_IPA" | grep "Info.plist"
+          unzip -l "$OUTPUT_IPA" | grep "Payload/Juice.app/Juice"
 
       - name: Upload Jail-Juice IPA Artifact
         uses: actions/upload-artifact@v4
