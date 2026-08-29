@@ -9,6 +9,7 @@
 #import <sys/wait.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <sys/stat.h>
 
 #define JUICE_MAGIC 0x4a554943u
 #define MSG_HELLO 1u
