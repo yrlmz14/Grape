@@ -864,8 +864,11 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
  }
  NSString *runtimeName=experimental?@"Grape-X64":@"Grape";
  NSString *runtime=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:runtimeName];
- if(![NSFileManager.defaultManager isExecutableFileAtPath:
-      [runtime stringByAppendingPathComponent:@"build/wine-ios/loader/wine"]])
+ NSString *loaderPath=[runtime stringByAppendingPathComponent:@"build/wine-ios/loader/wine"];
+ NSString *serverPath=[runtime stringByAppendingPathComponent:@"build/wine-ios/server/wineserver"];
+ chmod(loaderPath.fileSystemRepresentation, 0755);
+ chmod(serverPath.fileSystemRepresentation, 0755);
+ if(![NSFileManager.defaultManager fileExistsAtPath:loaderPath])
  {
   [self rejectLaunch:[NSString stringWithFormat:@"%@ is not installed in this build.",runtimeName]];
   return;
@@ -1123,7 +1126,83 @@ static void CopyControlString(char *destination,size_t capacity,NSString *value)
  return variables;
 }
 -(NSString *)resolveExe{NSString *e=self.exeField.text;if([e containsString:@"/"])return e;return [[self.grape stringByAppendingPathComponent:@"runtime/lib/wine/aarch64-windows"]stringByAppendingPathComponent:e];}
--(void)launchTapped{[self stopTapped];[self preparePrefix];NSArray *parts=self.argsField.text.length?[self.argsField.text componentsSeparatedByString:@" "]:@[];NSString *build=[self.grape stringByAppendingPathComponent:@"build/wine-ios"],*loader=[build stringByAppendingPathComponent:@"loader/wine"],*server=[build stringByAppendingPathComponent:@"server/wineserver"],*tracer=[self.grape stringByAppendingPathComponent:@"tools/grape-trace-parent"],*exe=[self resolveExe];NSArray *environment=[self environment];char **env=CopyStrings(environment);if(self.server<=0){char **serverArgv=CopyStrings(@[server,@"-f"]);posix_spawn_file_actions_t sf;posix_spawn_file_actions_init(&sf);int nullfd=open("/dev/null",O_WRONLY);if(nullfd>=0){posix_spawn_file_actions_adddup2(&sf,nullfd,1);posix_spawn_file_actions_adddup2(&sf,nullfd,2);}int sr=posix_spawn(&_server,server.UTF8String,&sf,NULL,serverArgv,env);posix_spawn_file_actions_destroy(&sf);if(nullfd>=0)close(nullfd);FreeStrings(serverArgv);[self append:[NSString stringWithFormat:@"Wine server: %d pid=%d\n",sr,self.server]];if(!sr)usleep(350000);}NSMutableArray *args=[NSMutableArray arrayWithObjects:tracer,loader,exe,nil];[args addObjectsFromArray:parts];char **argv=CopyStrings(args);int outputPipe[2],inputPipe[2];pipe(outputPipe);pipe(inputPipe);posix_spawn_file_actions_t fa;posix_spawn_file_actions_init(&fa);posix_spawn_file_actions_adddup2(&fa,inputPipe[0],0);posix_spawn_file_actions_adddup2(&fa,outputPipe[1],1);posix_spawn_file_actions_adddup2(&fa,outputPipe[1],2);posix_spawn_file_actions_addclose(&fa,inputPipe[1]);posix_spawn_file_actions_addclose(&fa,outputPipe[0]);int launchCwdFD=open(".",O_RDONLY);if(launchCwdFD>=0&&[exe containsString:@"/"])chdir(exe.stringByDeletingLastPathComponent.fileSystemRepresentation);int r=posix_spawn(&_child,tracer.UTF8String,&fa,NULL,argv,env);if(launchCwdFD>=0){fchdir(launchCwdFD);close(launchCwdFD);}posix_spawn_file_actions_destroy(&fa);close(inputPipe[0]);close(outputPipe[1]);self.childInput=r?-1:inputPipe[1];if(r)close(inputPipe[1]);int readFD=outputPipe[0];FreeStrings(argv);FreeStrings(env);self.canvas.hidden=self.mode.selectedSegmentIndex==1;[self append:[NSString stringWithFormat:@"\n%@ launch %@: %d pid=%d\n",self.mode.selectedSegmentIndex?@"CLI":@"GUI",exe,r,self.child]];if(!r)dispatch_async(dispatch_get_global_queue(0,0),^{char b[2048];ssize_t n;while((n=read(readFD,b,sizeof(b)))>0){NSString *text=[[NSString alloc]initWithBytes:b length:n encoding:NSUTF8StringEncoding];[self append:text?:@""];}close(readFD);waitpid(self.child,NULL,0);self.child=-1;if(self.childInput>=0){close(self.childInput);self.childInput=-1;}});}
+-(void)launchTapped{
+ [self stopTapped];
+ [self preparePrefix];
+ NSArray *parts=self.argsField.text.length?[self.argsField.text componentsSeparatedByString:@" "]:@[];
+ NSString *build=[self.grape stringByAppendingPathComponent:@"build/wine-ios"];
+ NSString *loader=[build stringByAppendingPathComponent:@"loader/wine"];
+ NSString *server=[build stringByAppendingPathComponent:@"server/wineserver"];
+ NSString *tracer=[self.grape stringByAppendingPathComponent:@"tools/grape-trace-parent"];
+ if(![NSFileManager.defaultManager fileExistsAtPath:tracer])
+  tracer=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"bin/grape-trace-parent"];
+ if(![NSFileManager.defaultManager fileExistsAtPath:tracer])
+  tracer=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"grape-trace-parent"];
+ chmod(tracer.fileSystemRepresentation, 0755);
+ chmod(loader.fileSystemRepresentation, 0755);
+ chmod(server.fileSystemRepresentation, 0755);
+ NSString *exe=[self resolveExe];
+ NSArray *environment=[self environment];
+ char **env=CopyStrings(environment);
+ if(self.server<=0){
+  char **serverArgv=CopyStrings(@[server,@"-f"]);
+  posix_spawn_file_actions_t sf;
+  posix_spawn_file_actions_init(&sf);
+  int nullfd=open("/dev/null",O_WRONLY);
+  if(nullfd>=0){
+   posix_spawn_file_actions_adddup2(&sf,nullfd,1);
+   posix_spawn_file_actions_adddup2(&sf,nullfd,2);
+  }
+  int sr=posix_spawn(&_server,server.UTF8String,&sf,NULL,serverArgv,env);
+  posix_spawn_file_actions_destroy(&sf);
+  if(nullfd>=0)close(nullfd);
+  FreeStrings(serverArgv);
+  [self append:[NSString stringWithFormat:@"Wine server: %d pid=%d\n",sr,self.server]];
+  if(!sr)usleep(350000);
+ }
+ NSMutableArray *args=[NSMutableArray arrayWithObjects:tracer,loader,exe,nil];
+ [args addObjectsFromArray:parts];
+ char **argv=CopyStrings(args);
+ int outputPipe[2],inputPipe[2];
+ pipe(outputPipe);
+ pipe(inputPipe);
+ posix_spawn_file_actions_t fa;
+ posix_spawn_file_actions_init(&fa);
+ posix_spawn_file_actions_adddup2(&fa,inputPipe[0],0);
+ posix_spawn_file_actions_adddup2(&fa,outputPipe[1],1);
+ posix_spawn_file_actions_adddup2(&fa,outputPipe[1],2);
+ posix_spawn_file_actions_addclose(&fa,inputPipe[1]);
+ posix_spawn_file_actions_addclose(&fa,outputPipe[0]);
+ int launchCwdFD=open(".",O_RDONLY);
+ if(launchCwdFD>=0&&[exe containsString:@"/"])chdir(exe.stringByDeletingLastPathComponent.fileSystemRepresentation);
+ int r=posix_spawn(&_child,tracer.UTF8String,&fa,NULL,argv,env);
+ if(launchCwdFD>=0){fchdir(launchCwdFD);close(launchCwdFD);}
+ posix_spawn_file_actions_destroy(&fa);
+ close(inputPipe[0]);
+ close(outputPipe[1]);
+ self.childInput=r?-1:inputPipe[1];
+ if(r)close(inputPipe[1]);
+ int readFD=outputPipe[0];
+ FreeStrings(argv);
+ FreeStrings(env);
+ self.canvas.hidden=self.mode.selectedSegmentIndex==1;
+ [self append:[NSString stringWithFormat:@"\n%@ launch %@: %d pid=%d\n",self.mode.selectedSegmentIndex?@"CLI":@"GUI",exe,r,self.child]];
+ if(!r)dispatch_async(dispatch_get_global_queue(0,0),^{
+  char b[2048];
+  ssize_t n;
+  while((n=read(readFD,b,sizeof(b)))>0){
+   NSString *text=[[NSString alloc]initWithBytes:b length:n encoding:NSUTF8StringEncoding];
+   [self append:text?:@""];
+  }
+  close(readFD);
+  waitpid(self.child,NULL,0);
+  self.child=-1;
+  if(self.childInput>=0){
+   close(self.childInput);
+   self.childInput=-1;
+  }
+ });
+}
 -(void)stopTapped{if(self.childInput>=0){close(self.childInput);self.childInput=-1;}if(self.child>0){kill(self.child,SIGTERM);self.child=-1;}}
 -(BOOL)textFieldShouldReturn:(UITextField *)field
 {

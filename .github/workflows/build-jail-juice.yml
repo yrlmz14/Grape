@@ -100,7 +100,20 @@ jobs:
             if [ -d "$CORE_APP/Grape-X64" ]; then
               cp -R "$CORE_APP/Grape-X64" build/Payload/Juice.app/
             fi
+            if [ -d "$CORE_APP/Libraries" ]; then
+              cp -R "$CORE_APP/Libraries" build/Payload/Juice.app/
+            fi
+            if [ -d "$CORE_APP/Frameworks" ]; then
+              cp -R "$CORE_APP/Frameworks" build/Payload/Juice.app/
+            fi
             rm -rf /tmp/juice_base.zip /tmp/juice_extracted
+          fi
+
+          # Ensure tools/ contains grape-trace-parent in Grape and Grape-X64
+          mkdir -p build/Payload/Juice.app/Grape/tools build/Payload/Juice.app/Grape-X64/tools
+          if [ -d "build/launchers" ]; then
+            cp build/launchers/* build/Payload/Juice.app/Grape/tools/ 2>/dev/null || true
+            cp build/launchers/* build/Payload/Juice.app/Grape-X64/tools/ 2>/dev/null || true
           fi
 
           # 5. Clean dosdevices symlinks (must not contain static colons or root symlinks that break Sideloadly / Windows unzip)
@@ -112,12 +125,22 @@ jobs:
           mkdir -p build/Payload/Juice.app/Grape-X64/prefix-template/drive_c/windows/system32
           find build/Payload -name "*:*" -delete 2>/dev/null || true
 
+          # Set executable permissions on all binaries and dylibs
+          chmod -R 0755 build/Payload/Juice.app/Grape/build/wine-ios/ 2>/dev/null || true
+          chmod -R 0755 build/Payload/Juice.app/Grape-X64/build/wine-ios/ 2>/dev/null || true
+          chmod -R 0755 build/Payload/Juice.app/Libraries/ 2>/dev/null || true
+          chmod -R 0755 build/Payload/Juice.app/bin/ 2>/dev/null || true
+          chmod 0755 build/Payload/Juice.app/Juice 2>/dev/null || true
+
           # 6. Generate app icons
           python3 scripts/generate-app-icons.py build/Payload/Juice.app 2>/dev/null || true
 
           # 7. Apply JIT code signing entitlements
           if command -v ldid >/dev/null 2>&1; then
             ldid -Sconfig/jailed-entitlements.plist build/Payload/Juice.app/Juice 2>/dev/null || true
+            find build/Payload/Juice.app -name "wine" -o -name "wineserver" -o -name "grape-*" | while read -r bin; do
+              ldid -Sconfig/jailed-child-entitlements.plist "$bin" 2>/dev/null || true
+            done
           fi
 
           # Verify Payload structure
@@ -125,6 +148,8 @@ jobs:
           ls -la build/Payload/Juice.app/
           test -f build/Payload/Juice.app/Info.plist || { echo "❌ ERROR: Info.plist missing!"; exit 1; }
           test -f build/Payload/Juice.app/Juice || { echo "❌ ERROR: Main binary missing!"; exit 1; }
+          test -f build/Payload/Juice.app/Grape/build/wine-ios/loader/wine || { echo "❌ ERROR: Wine loader missing!"; exit 1; }
+          echo "✅ Wine loader found: $(ls -la build/Payload/Juice.app/Grape/build/wine-ios/loader/wine)"
           echo "✅ Payload structure validated successfully."
 
       - name: Package Jail-Juice IPA
